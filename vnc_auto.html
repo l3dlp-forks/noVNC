@@ -2,9 +2,10 @@
 <html>
 <head>
 
-    <!-- 
+    <!--
     noVNC example: simple example using default UI
     Copyright (C) 2012 Joel Martin
+    Copyright (C) 2013 Samuel Mannehed for Cendio AB
     noVNC is licensed under the MPL 2.0 (see LICENSE.txt)
     This file is licensed under the 2-Clause BSD license (see LICENSE.txt).
 
@@ -46,10 +47,20 @@
     <div id="noVNC_screen">
             <div id="noVNC_status_bar" class="noVNC_status_bar" style="margin-top: 0px;">
                 <table border=0 width="100%"><tr>
-                    <td><div id="noVNC_status">Loading</div></td>
+                    <td><div id="noVNC_status" style="position: relative; height: auto;">
+                        Loading
+                    </div></td>
                     <td width="1%"><div id="noVNC_buttons">
                         <input type=button value="Send CtrlAltDel"
                             id="sendCtrlAltDelButton">
+                        <span id="noVNC_xvp_buttons">
+                        <input type=button value="Shutdown"
+                            id="xvpShutdownButton">
+                        <input type=button value="Reboot"
+                            id="xvpRebootButton">
+                        <input type=button value="Reset"
+                            id="xvpResetButton">
+                        </span>
                             </div></td>
                 </tr></table>
             </div>
@@ -65,10 +76,27 @@
 
         // Load supporting scripts
         Util.load_scripts(["webutil.js", "base64.js", "websock.js", "des.js",
-                           "input.js", "display.js", "jsunzip.js", "rfb.js"]);
+                           "keysymdef.js", "keyboard.js", "input.js", "display.js",
+                           "jsunzip.js", "rfb.js", "keysym.js"]);
 
         var rfb;
+        var resizeTimeout;
 
+
+        function UIresize() {
+            if (WebUtil.getQueryVar('resize', false)) {
+                var innerW = window.innerWidth;
+                var innerH = window.innerHeight;
+                var controlbarH = $D('noVNC_status_bar').offsetHeight;
+                var padding = 5;
+                if (innerW !== undefined && innerH !== undefined)
+                    rfb.setDesktopSize(innerW, innerH - controlbarH - padding);
+            }
+        }
+        function FBUComplete(rfb, fbu) {
+            UIresize();
+            rfb.set_onFBUComplete(function() { });
+        }
         function passwordRequired(rfb) {
             var msg;
             msg = '<form onsubmit="return setPassword();"';
@@ -87,6 +115,18 @@
             rfb.sendCtrlAltDel();
             return false;
         }
+        function xvpShutdown() {
+            rfb.xvpShutdown();
+            return false;
+        }
+        function xvpReboot() {
+            rfb.xvpReboot();
+            return false;
+        }
+        function xvpReset() {
+            rfb.xvpReset();
+            return false;
+        }
         function updateState(rfb, state, oldstate, msg) {
             var s, sb, cad, level;
             s = $D('noVNC_status');
@@ -101,12 +141,36 @@
                 default:             level = "warn";   break;
             }
 
-            if (state === "normal") { cad.disabled = false; }
-            else                    { cad.disabled = true; }
+            if (state === "normal") {
+                cad.disabled = false;
+            } else {
+                cad.disabled = true;
+                xvpInit(0);
+            }
 
             if (typeof(msg) !== 'undefined') {
                 sb.setAttribute("class", "noVNC_status_" + level);
                 s.innerHTML = msg;
+            }
+        }
+
+        window.onresize = function () {
+            // When the window has been resized, wait until the size remains
+            // the same for 0.5 seconds before sending the request for changing
+            // the resolution of the session
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(function(){
+                UIresize();
+            }, 500);
+        };
+
+        function xvpInit(ver) {
+            var xvpbuttons;
+            xvpbuttons = $D('noVNC_xvp_buttons');
+            if (ver >= 1) {
+                xvpbuttons.style.display = 'inline';
+            } else {
+                xvpbuttons.style.display = 'none';
             }
         }
 
@@ -115,6 +179,9 @@
 
             $D('sendCtrlAltDelButton').style.display = "inline";
             $D('sendCtrlAltDelButton').onclick = sendCtrlAltDel;
+            $D('xvpShutdownButton').onclick = xvpShutdown;
+            $D('xvpRebootButton').onclick = xvpReboot;
+            $D('xvpResetButton').onclick = xvpReset;
 
             WebUtil.init_logging(WebUtil.getQueryVar('logging', 'warn'));
             document.title = unescape(WebUtil.getQueryVar('title', 'noVNC'));
@@ -125,11 +192,11 @@
             // if port == 80 (or 443) then it won't be present and should be
             // set manually
             if (!port) {
-                if (window.location.protocol.substring(0,4) == 'http') {            
-                    port = 80;
-                }
-                else if (window.location.protocol.substring(0,5) == 'https') {            
+                if (window.location.protocol.substring(0,5) == 'https') {
                     port = 443;
+                }
+                else if (window.location.protocol.substring(0,4) == 'http') {
+                    port = 80;
                 }
             }
 
@@ -149,16 +216,24 @@
                 return;
             }
 
-            rfb = new RFB({'target':       $D('noVNC_canvas'),
-                           'encrypt':      WebUtil.getQueryVar('encrypt',
-                                    (window.location.protocol === "https:")),
-                           'repeaterID':   WebUtil.getQueryVar('repeaterID', ''),
-                           'true_color':   WebUtil.getQueryVar('true_color', true),
-                           'local_cursor': WebUtil.getQueryVar('cursor', true),
-                           'shared':       WebUtil.getQueryVar('shared', true),
-                           'view_only':    WebUtil.getQueryVar('view_only', false),
-                           'updateState':  updateState,
-                           'onPasswordRequired':  passwordRequired});
+            try {
+                rfb = new RFB({'target':       $D('noVNC_canvas'),
+                               'encrypt':      WebUtil.getQueryVar('encrypt',
+                                        (window.location.protocol === "https:")),
+                               'repeaterID':   WebUtil.getQueryVar('repeaterID', ''),
+                               'true_color':   WebUtil.getQueryVar('true_color', true),
+                               'local_cursor': WebUtil.getQueryVar('cursor', true),
+                               'shared':       WebUtil.getQueryVar('shared', true),
+                               'view_only':    WebUtil.getQueryVar('view_only', false),
+                               'onUpdateState':  updateState,
+                               'onXvpInit':    xvpInit,
+                               'onPasswordRequired':  passwordRequired,
+                               'onFBUComplete': FBUComplete});
+            } catch (exc) {
+                UI.updateState(null, 'fatal', null, 'Unable to create RFB client -- ' + exc);
+                return; // don't continue trying to connect
+            }
+
             rfb.connect(host, port, password, path);
         };
         </script>
